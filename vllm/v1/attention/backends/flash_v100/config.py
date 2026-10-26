@@ -101,6 +101,7 @@ class V100AttnConfig:
     compare_triton_tensor_dump_dir: str | None
     compare_triton_tensor_dump_max_tokens: int
     decode_strategy: str
+    fp8_bridge_head_groups: int
     prefill_bfla_mask_block_n: int
     prefill_bfla_min_kv: int
     prefill_bfla_min_q: int

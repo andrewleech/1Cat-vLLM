@@ -122,6 +122,22 @@ def test_two_engine_policies_remain_isolated_after_environment_change(monkeypatc
     assert first.compute_hash() != second.compute_hash()
 
 
+def test_qpn4_lazy_workspace_is_opt_in_and_part_of_active_graph_identity():
+    resident = KernelConfig()
+    lazy = KernelConfig(
+        sm70_nvfp4=Sm70NvFp4Config(qpn4_lazy_dense_workspace=True)
+    )
+    assert not resident.sm70_nvfp4.qpn4_lazy_dense_workspace
+    for kernel in (resident, lazy):
+        kernel.sm70_nvfp4.resolve(qualified=False, active=False)
+    # Unused NVFP4 options must not invalidate graphs for other formats.
+    assert resident.compute_hash() == lazy.compute_hash()
+    for kernel in (resident, lazy):
+        kernel.sm70_nvfp4.active = True
+    assert resident.compute_hash() != lazy.compute_hash()
+    assert not resident.sm70_nvfp4.qpn4_lazy_dense_workspace
+
+
 def test_model_policy_retains_state_contract_but_not_tp_kv_concurrency():
     for tp, kv, concurrency in [(2, "fp8_e5m2", 8), (4, "float16", 1)]:
         cfg = make_config("dflash", tp, concurrency, kv, 4096)

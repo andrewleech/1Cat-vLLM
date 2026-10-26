@@ -209,6 +209,55 @@ def test_attention_workspace_shutdown_keeps_other_engine_and_legacy(monkeypatch)
     assert legacy == {}
 
 
+def test_fp8_bridge_workspace_stays_within_addressable_context():
+    import math
+
+    import torch
+
+    from vllm.config import set_current_vllm_config
+    from vllm.runtime_resources import release_runtime_resources
+    from vllm.v1.attention.backends.flash_v100 import dense_prefill
+
+    engine = SimpleNamespace()
+    input_page_size = 1616
+    output_page_size = dense_prefill._FP8_PREFILL_BRIDGE_PAGE_SIZE
+    max_model_len = 262144
+    table_width = math.ceil(max_model_len / input_page_size)
+    max_blocks = math.ceil(table_width * input_page_size / output_page_size)
+    # Small head dimensions keep the resource-contract test CPU-sized. Page
+    # counts and FP16 storage follow the production 262K-context boundary.
+    key_cache = torch.empty((1, input_page_size, 1, 2), dtype=torch.uint8)
+    max_kv_bytes = max_blocks * output_page_size * 1 * 2 * 2
+    try:
+        with set_current_vllm_config(engine):
+            for seq_len in (180000, max_model_len, 8000):
+                active_pages = math.ceil(seq_len / input_page_size)
+                required_blocks = math.ceil(
+                    active_pages * input_page_size / output_page_size
+                )
+                workspace = dense_prefill.get_fp8_prefill_bridge_workspace(
+                    key_cache, required_blocks, max_blocks=max_blocks
+                )
+                assert workspace is not None
+                key, value, table = workspace
+                assert key.shape == (required_blocks, output_page_size, 1, 2)
+                assert value.shape == key.shape
+                # The backing allocations, not just returned views, must fit
+                # the addressable context even after a shorter prior request.
+                for tensor in (key, value):
+                    assert tensor.untyped_storage().nbytes() <= max_kv_bytes
+                    tensor[-1].fill_(7)
+                    assert torch.all(tensor[-1] == 7)
+                assert table.shape == (1, required_blocks)
+                assert table[0, -1].item() == required_blocks - 1
+                assert (
+                    table.untyped_storage().nbytes()
+                    <= max_blocks * table.element_size()
+                )
+    finally:
+        release_runtime_resources(engine)
+
+
 def test_attention_diagnostic_budgets_and_output_do_not_cross_engines(tmp_path):
     import json
 

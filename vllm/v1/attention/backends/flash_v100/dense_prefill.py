@@ -668,6 +668,7 @@ def try_sm70_fa2_d256_prefill(
 def get_fp8_prefill_bridge_workspace(
     key_cache: torch.Tensor,
     required_blocks: int,
+    max_blocks: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
     cache = workspace_cache(
         "fp8_prefill_bridge_workspaces", _fp8_prefill_bridge_workspaces
@@ -702,6 +703,9 @@ def get_fp8_prefill_bridge_workspace(
 
     previous_capacity = workspace[0].shape[0] if workspace is not None else 0
     capacity = max(required_blocks, previous_capacity * 2)
+    if max_blocks is not None:
+        # Do not reserve more pages than the full input block table addresses.
+        capacity = min(capacity, max(required_blocks, int(max_blocks)))
     shape = (
         capacity,
         _FP8_PREFILL_BRIDGE_PAGE_SIZE,

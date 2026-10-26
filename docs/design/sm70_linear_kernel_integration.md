@@ -106,6 +106,45 @@ The rest of SM70 still has legacy environment policies. This first migration
 isolates QPN2 policy; it does not claim complete multi-engine isolation for
 unmigrated attention, GEMM tuning or collective routes.
 
+## Opt-in QPN4 temporary dense workspace
+
+Qualified QPN4 linears can avoid the persistent FP16 dense prefill workspace:
+
+```bash
+vllm serve MODEL \
+  --kernel-config '{"sm70_nvfp4":{"qpn4_lazy_dense_workspace":true}}'
+```
+
+The typed option defaults to `false`; it has no environment alias. It does not
+enable QPN4 for an otherwise unqualified model or change QPN2, FP8, TurboMind,
+or MoE scratch policies. The engine captures the choice when preparing weights,
+and the active NVFP4 policy participates in the compilation cache key.
+
+With the option enabled, preparation neither allocates the QPN4 dense buffer
+nor registers a layer workspace. The prepared provider passes pointer `0`
+through the existing native wrapper, retaining the captured `native_policy`.
+The native operator already ignores this pointer for M=1. For M>1 it allocates
+its own shape-sized FP16 dense tensor, dequantizes into it, and performs the
+same GEMM and optional gated-SiLU epilogue as the resident-workspace path.
+There is no Python per-call dense allocation, placeholder buffer, or change to
+the native operator ABI.
+
+The allocation is lazy, not free: an eager prefill still needs the dense
+temporary, can fail for insufficient memory, and may leave allocator-reserved
+memory available for reuse. Removing the load-time allocation also removes its
+load-time OOM fallback; a later prefill OOM is reported normally. M=1 CUDA graph
+capture does not allocate this dense tensor. Capturing M>1 records the native
+allocation in the graph's private allocator pool; the graph keeps the storage
+needed for replay, so this option does **not** promise to eliminate dense memory
+from M>1 graphs or reduce measured peak memory. No capture-mode or scheduler
+defaults are changed.
+
+`tests/kernels/quantization/test_sm70_nvfp4_small_prefill.py` includes SM70
+numerical coverage for regular and gated linears at M=1, 2, 17, and 1025,
+against both the resident-pointer native contract and an independent NVFP4
+reference. The same cases cover eager execution, CUDA graph replay with changed
+inputs, and export/save/reload without a workspace registration.
+
 ## Route regression command
 
 Run from a checkout with the normal Python dependencies installed:

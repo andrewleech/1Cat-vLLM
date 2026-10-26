@@ -115,6 +115,7 @@ class FlashAttnV100Impl(TritonAttentionImpl):
         "use_flash_v100_prefill_splitkv"
     )
     use_fp8_prefill_bridge = _config.ConfigField[bool]("use_fp8_prefill_bridge")
+    fp8_bridge_head_groups = _config.ConfigField[int]("fp8_bridge_head_groups")
     use_prefill_paged_cache = _config.ConfigField[bool]("use_prefill_paged_cache")
     use_smallq_decode_xqa = _config.ConfigField[bool]("use_smallq_decode_xqa")
     use_triton_prefill = _config.ConfigField[bool]("use_triton_prefill")
@@ -254,6 +255,9 @@ class FlashAttnV100Impl(TritonAttentionImpl):
             if self.kv_codec is FP8_E4M3
             else self.fp8_e5m2_paged_kv_to_fp16 is not None
         ) and _config.options().value("fp8_prefill_bridge")
+        self.fp8_bridge_head_groups = max(
+            1, _config.options().value("fp8_bridge_head_groups")
+        )
         self.use_flash_v100_prefill_splitkv = (
             self.flash_attn_prefill_paged_splitkv is not None
             and _config.options().value("prefill_split_kv")

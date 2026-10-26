@@ -131,6 +131,23 @@ persistent warmup allocation/reserve, as the actual KV budget already does.
 This corrects the suggestion without increasing the budget or removing the
 Graph reserve.
 
+`VLLM_WEIGHT_LOAD_MAX_SPLIT_SCOPE` controls only the model-load scope. It defaults
+to `1` (enabled), retaining the existing temporary 20 MiB split limit intended to
+reduce fragmentation during weight loading at the cost of more CUDA allocations.
+Set `VLLM_WEIGHT_LOAD_MAX_SPLIT_SCOPE=0` to load weights without overriding the
+allocator settings, for example when evaluating a user-specified
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` configuration. This is an
+opt-out for workload-specific memory tuning, not a performance recommendation.
+Other values leave the scope enabled.
+
+With the scope enabled, the full configured allocator options are restored even
+if loading raises. With it disabled, loading does not change allocator settings.
+The legacy `PYTORCH_CUDA_ALLOC_CONF` takes precedence over `PYTORCH_ALLOC_CONF`,
+including when empty. This switch does not disable the separate SM70 warmup
+scope, alter the shared allocator helper, or require a native-extension ABI
+change. Platforms without CUDA or PyTorch's optional runtime allocator-settings
+API retain the existing no-op behavior.
+
 Expandable allocator segments were rejected as a universal default in the prior
 audit: they improved TP1's estimated KV budget but reduced TP2's budget and
 increased TP2 request-resident memory. This change is separate from workspace

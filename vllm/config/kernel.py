@@ -254,6 +254,8 @@ class Sm70NvFp4Config(Sm70LinearCompatibility):
     """Captured native selectors/tuning; unused formats do not affect graph keys."""
     qpn4: bool | None = None
     """Retain the shape/model-qualified QPN4 provider."""
+    qpn4_lazy_dense_workspace: bool = False
+    """Use QPN4's native temporary prefill scratch instead of a resident buffer."""
     dense_qpn2: bool = True
     """Allow native QPN2 with FP16 dense prefill on supported Turing workers."""
     qpn2: bool | None = None

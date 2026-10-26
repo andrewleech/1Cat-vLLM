@@ -117,9 +117,52 @@ def _run_fp8_prefill_bridge(
     causal: bool,
     window_size: tuple[int, int],
     out: torch.Tensor,
+    head_groups: int | None = None,
 ) -> tuple[torch.Tensor, bool] | None:
     if block_table.shape[0] != 1:
         return None
+    if head_groups is None:
+        head_groups = self.fp8_bridge_head_groups
+    kv_heads = int(key_cache.shape[2])
+    q_heads = int(query.shape[2])
+    if kv_heads <= 0 or q_heads % kv_heads != 0:
+        return None
+    if head_groups > 1 and kv_heads % head_groups == 0:
+        # Keep whole KV heads and their contiguous GQA query-head ranges.
+        # Reuse one group's FP16 KV, query and output buffers for every pass.
+        kv_per_group = kv_heads // head_groups
+        q_per_kv = q_heads // kv_heads
+        q_per_group = kv_per_group * q_per_kv
+        group_query = torch.empty(
+            (*query.shape[:2], q_per_group, query.shape[3]),
+            dtype=query.dtype,
+            device=query.device,
+        )
+        group_out = torch.empty_like(group_query)
+        for group in range(head_groups):
+            kv_lo = group * kv_per_group
+            kv_hi = kv_lo + kv_per_group
+            q_lo = kv_lo * q_per_kv
+            q_hi = kv_hi * q_per_kv
+            group_query.copy_(query[:, :, q_lo:q_hi])
+            group_result = self._run_fp8_prefill_bridge(
+                query=group_query,
+                key_cache=key_cache[:, :, kv_lo:kv_hi],
+                value_cache=value_cache[:, :, kv_lo:kv_hi],
+                block_table=block_table,
+                seq_lens=seq_lens,
+                seq_len=seq_len,
+                k_scale=k_scale,
+                v_scale=v_scale,
+                causal=causal,
+                window_size=window_size,
+                out=group_out,
+                head_groups=1,
+            )
+            if group_result is None:
+                return None
+            out[:, :, q_lo:q_hi].copy_(group_result[0])
+        return out, True
     input_block_size = int(key_cache.shape[1])
     active_input_blocks = min(
         int(block_table.shape[1]),
@@ -136,6 +179,10 @@ def _run_fp8_prefill_bridge(
     workspace = _dense_prefill.get_fp8_prefill_bridge_workspace(
         key_cache,
         required_blocks,
+        max_blocks=_masks.cdiv_int(
+            int(block_table.shape[1]) * input_block_size,
+            _dense_prefill._FP8_PREFILL_BRIDGE_PAGE_SIZE,
+        ),
     )
     if workspace is None:
         return None

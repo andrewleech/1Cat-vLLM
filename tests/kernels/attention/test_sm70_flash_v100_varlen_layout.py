@@ -973,3 +973,122 @@ def test_sm70_flash_v100_fp8_e4m3_g6_routes_wave_partitions_exactly(
     ).float()
     assert torch.all(delta <= torch.maximum(one_ulp, torch.full_like(delta, 1e-4)))
     assert float(delta.mean()) <= 1e-5
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize(
+    "cache_dtype,torch_dtype",
+    [("fp8_e4m3", torch.float8_e4m3fn), ("fp8_e5m2", torch.float8_e5m2)],
+)
+@pytest.mark.parametrize("k_scale,v_scale", [(1.0, 1.0), (0.75, 1.25)])
+@pytest.mark.parametrize(
+    "head_groups,num_q_heads,num_kv_heads,input_page_size,seq_len,query_len",
+    [
+        (1, 12, 4, 1568, 1700, 32),
+        (2, 24, 4, 1568, 1700, 32),
+        (4, 4, 4, 1056, 2048, 48),
+        (3, 12, 6, 1088, 4096, 1024),
+        (2, 6, 1, 1056, 1700, 32),  # MQA cannot be split.
+        (3, 12, 4, 1568, 2048, 48),  # Non-divisor stays unsplit.
+        (8, 12, 4, 1088, 1700, 32),  # More groups than KV heads.
+        (0, 12, 4, 1568, 1700, 32),
+        (-2, 12, 4, 1056, 2048, 48),
+    ],
+)
+@torch.inference_mode()
+def test_sm70_flash_v100_fp8_bridge_head_groups_exact(
+    monkeypatch,
+    cache_dtype,
+    torch_dtype,
+    k_scale,
+    v_scale,
+    head_groups,
+    num_q_heads,
+    num_kv_heads,
+    input_page_size,
+    seq_len,
+    query_len,
+):
+    if torch.cuda.get_device_capability() != (7, 0):
+        pytest.skip("FlashAttention-V100 regression is SM70/V100 only")
+    pytest.importorskip("flash_attn_v100")
+
+    from vllm.v1.attention.backends.flash_attn_v100 import FlashAttnV100Impl
+
+    monkeypatch.setenv("VLLM_FLASH_V100_FP8_BRIDGE_HEAD_GROUPS", str(head_groups))
+    monkeypatch.setenv("VLLM_FLASH_V100_FP8_PREFILL_BRIDGE", "1")
+    impl = FlashAttnV100Impl(
+        num_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        head_size=256,
+        scale=256**-0.5,
+        alibi_slopes=None,
+        sliding_window=None,
+        kv_cache_dtype=cache_dtype,
+    )
+    # Match the production operator owner: E4M3 uses the FA2 bridge, not the
+    # similarly named conversion wrapper exported by flash_attn_v100.
+    if cache_dtype == "fp8_e4m3":
+        if impl.fp8_e4m3_paged_kv_to_fp16 is None:
+            pytest.skip(
+                "installed FA2 extension lacks "
+                "_vllm_fa2_C.sm70_v37_e4m3_bridge"
+            )
+    elif impl.fp8_e5m2_paged_kv_to_fp16 is None:
+        pytest.skip("installed Flash-V100 extension lacks the E5M2 bridge")
+    torch.manual_seed(20261026)
+    input_blocks = math.ceil(seq_len / input_page_size)
+    shape = (input_blocks, input_page_size, num_kv_heads, 256)
+    key_cache = (
+        torch.randn(shape, dtype=torch.float16, device="cuda")
+        .to(torch_dtype)
+        .view(torch.uint8)
+    )
+    value_cache = (
+        torch.randn(shape, dtype=torch.float16, device="cuda")
+        .to(torch_dtype)
+        .view(torch.uint8)
+    )
+    query = torch.randn(
+        1, query_len, num_q_heads, 256, dtype=torch.float16, device="cuda"
+    )
+    # Reverse physical pages and retain a partial final page to catch indexing
+    # errors independently of the GQA head ranges.
+    block_table = torch.arange(
+        input_blocks - 1, -1, -1, dtype=torch.int32, device="cuda"
+    ).unsqueeze(0)
+    seq_lens = torch.tensor([seq_len], dtype=torch.int32, device="cuda")
+    assert impl._should_use_fp8_prefill_bridge(
+        q_len=query_len,
+        head_dim=256,
+        key_cache=key_cache,
+        value_cache=value_cache,
+        causal=True,
+        window_size=(-1, -1),
+    )
+    arguments = dict(
+        query=query,
+        key_cache=key_cache,
+        value_cache=value_cache,
+        block_table=block_table,
+        seq_lens=seq_lens,
+        seq_len=seq_len,
+        k_scale=k_scale,
+        v_scale=v_scale,
+        causal=True,
+        window_size=(-1, -1),
+    )
+    unsplit = impl._run_fp8_prefill_bridge(
+        **arguments, out=torch.empty_like(query), head_groups=1
+    )
+    assert unsplit is not None
+    # The grouped execution reuses workspace; preserve the reference output.
+    expected = unsplit[0].clone()
+    out = torch.full_like(query, float("nan"))
+    grouped = impl._run_fp8_prefill_bridge(**arguments, out=out)
+    assert grouped is not None
+    if head_groups > 1 and num_kv_heads % head_groups == 0:
+        assert grouped[0] is out
+        assert grouped[1]
+    torch.accelerator.synchronize()
+    assert torch.equal(grouped[0], expected)

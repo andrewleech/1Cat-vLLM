@@ -754,6 +754,8 @@ class FlashV100Options(CapturedFlashOptions):
     """Retained VLLM_FLASH_V100_DECODE_USE_XQA input."""
     fp8_prefill_bridge: bool | None = None
     """Retained VLLM_FLASH_V100_FP8_PREFILL_BRIDGE input."""
+    fp8_bridge_head_groups: int | None = None
+    """FP8 bridge KV-head groups; values below one use the unsplit bridge."""
     smallq_decode_use_xqa: bool | None = None
     """Retained VLLM_FLASH_V100_SMALLQ_DECODE_USE_XQA input."""
     prefill_prefix_decode_rows: bool | None = None
@@ -1048,6 +1050,11 @@ class FlashV100Options(CapturedFlashOptions):
         ),
         "decode_use_xqa": ("VLLM_FLASH_V100_DECODE_USE_XQA", "eq1", "1"),
         "fp8_prefill_bridge": ("VLLM_FLASH_V100_FP8_PREFILL_BRIDGE", "ne0", "1"),
+        "fp8_bridge_head_groups": (
+            "VLLM_FLASH_V100_FP8_BRIDGE_HEAD_GROUPS",
+            "int",
+            "1",
+        ),
         "smallq_decode_use_xqa": ("VLLM_FLASH_V100_SMALLQ_DECODE_USE_XQA", "eq1", "1"),
         "prefill_prefix_decode_rows": (
             "VLLM_FLASH_V100_PREFILL_PREFIX_DECODE_ROWS",

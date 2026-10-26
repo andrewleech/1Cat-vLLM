@@ -960,6 +960,7 @@ if TYPE_CHECKING:
     VLLM_QWEN4EXP_PLE_HOST_RESERVE_GIB: float | None = None
     VLLM_LOG_MODEL_INSPECTION: bool = False
     VLLM_DEBUG_MFU_METRICS: bool = False
+    VLLM_WEIGHT_LOAD_MAX_SPLIT_SCOPE: bool = True
     VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY: bool = False
     VLLM_WEIGHT_OFFLOADING_DISABLE_UVA: bool = False
     VLLM_DISABLE_LOG_LOGO: bool = False
@@ -15395,6 +15396,21 @@ environment_variables: dict[str, Callable[[], Any]] = {
         category="debug",
         declared_default="False",
         effective_default="False",
+        automatic_conditions=(),
+        acceleration_paths=(),
+        user_visible=True,
+    ),
+    "VLLM_WEIGHT_LOAD_MAX_SPLIT_SCOPE": env_var(
+        lambda: os.getenv("VLLM_WEIGHT_LOAD_MAX_SPLIT_SCOPE", "1") != "0",
+        description=(
+            "Temporarily set the CUDA allocator max_split_size_mb to 20 during "
+            "model loading, preserving the other allocator options. Set to 0 "
+            "to keep the configured split limit during loading. Does not "
+            "change SM70 warmup allocator scoping."
+        ),
+        category="configuration",
+        declared_default="True",
+        effective_default="True",
         automatic_conditions=(),
         acceleration_paths=(),
         user_visible=True,

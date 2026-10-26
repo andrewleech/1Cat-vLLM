@@ -298,12 +298,44 @@ attention shape is covered by the bitwise operator regression.
 ## Runtime Controls
 
 - `VLLM_FLASH_V100_FP8_PREFILL_BRIDGE=0`: disable the prefill bridge.
+- `VLLM_FLASH_V100_FP8_BRIDGE_HEAD_GROUPS=N`: opt in to sequential KV-head
+  groups for the existing FP8 prefill bridge (default `1`, one unsplit pass).
 - `VLLM_FLASH_V100_DECODE_USE_XQA=0`: disable all XQA decode.
 - `VLLM_FLASH_V100_DECODE_FP8_XQA_MIN_SEQ_LEN=8192`: non-graph FP8 XQA
   crossover threshold.
 
 The bridge and FP8 XQA are enabled by default under their strict shape and
 dtype gates. FP8 E4M3 is not routed through either E5M2 implementation.
+
+The typed equivalent is
+`attention_config.flash_v100.options.fp8_bridge_head_groups`, for example:
+
+```bash
+vllm serve <model> --attention-config \
+  '{"backend":"FLASH_ATTN_V100","flash_v100":{"options":{"fp8_bridge_head_groups":2}}}'
+```
+
+The typed value takes precedence over the environment, and the resolved value
+is captured when the attention implementation is constructed. Values below one
+use one group; non-integer legacy input raises through the existing integer
+option parser. A positive group count that does not divide the layer's KV-head
+count (including more groups than heads, or splitting MQA) keeps the unsplit
+bridge. Grouping requires an integral query-head/KV-head ratio; an invalid
+ratio declines the bridge rather than slicing a partial query-head range.
+
+Each group converts whole KV heads and attends their corresponding contiguous
+GQA query-head range, then writes that range into the original output. E4M3
+and E5M2 retain their existing conversion entrypoints and distinct K/V scales.
+All bridge eligibility gates, masks, and attention scale semantics are unchanged.
+No native ABI changes are required.
+
+For `N` valid groups, the FP16 K/V workspace holds `1/N` of the KV heads, at
+the cost of `N` conversion/attention passes and copying grouped queries and
+outputs. Query and output scratch buffers are reused across passes. Workspace
+growth is capped at the FP16 pages addressable by the full input block-table
+width, rounded up for the bridge's output-page size, rather than doubling
+beyond the maximum context. The cap is not the shorter current request's
+page count, and existing allocation-failure/capture fallback behavior remains.
 
 ## Tests And Artifacts
 

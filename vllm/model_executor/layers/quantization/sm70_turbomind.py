@@ -47,6 +47,7 @@ class SM70TurboMindLinearState:
     # QPN2 launch configuration (split-K, independent accumulator chains).
     split_k: int = 0
     accumulator_chains: int = 0
+    qpn4_lazy_dense_workspace: bool = False
     native_ops: "NativeBindings" = field(init=False, repr=False, compare=False)
     provider: "PreparedLinearProvider" = field(init=False, repr=False, compare=False)
 
@@ -354,6 +355,7 @@ def _store_state(
     prescaled_scales: bool = False,
     split_k: int = 0,
     accumulator_chains: int = 0,
+    qpn4_lazy_dense_workspace: bool = False,
 ) -> None:
     state = SM70TurboMindLinearState(
         weight=weight,
@@ -370,6 +372,7 @@ def _store_state(
         prescaled_scales=prescaled_scales,
         split_k=split_k,
         accumulator_chains=accumulator_chains,
+        qpn4_lazy_dense_workspace=qpn4_lazy_dense_workspace,
     )
     setattr(layer, STATE_ATTR, state)
 
@@ -787,7 +790,7 @@ def get_nvfp4_qpn4_dense_workspace(weight: torch.Tensor) -> torch.Tensor | None:
 
 def prepare_nvfp4_qpn4_linear(
     layer: torch.nn.Module,
-    workspace: torch.Tensor,
+    workspace: torch.Tensor | None,
     gated_silu: bool,
 ) -> None:
     """Replace one accepted NVFP4 dense weight with memory-neutral QPN4."""
@@ -814,7 +817,8 @@ def prepare_nvfp4_qpn4_linear(
         packed_weight, packed_scales = sm70_ops.nvfp4_qpn4_prepare_sm70(
             qweight, fp16_scales
         )
-    register_layer_workspace(layer, workspace, family="nvfp4")
+    if workspace is not None:
+        register_layer_workspace(layer, workspace, family="nvfp4")
     _store_state(
         layer,
         packed_weight,
@@ -826,6 +830,7 @@ def prepare_nvfp4_qpn4_linear(
         gated_silu=gated_silu,
         global_scale=global_scale,
         use_scale_code=use_scale_code,
+        qpn4_lazy_dense_workspace=workspace is None,
     )
 
 
